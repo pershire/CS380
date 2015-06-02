@@ -1,7 +1,9 @@
+import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -25,16 +27,19 @@ public class CryptoClient {
 		try (Socket socket = new Socket("45.50.5.238", 38008)) {
 			InputStream is = socket.getInputStream();
 			OutputStream os = socket.getOutputStream();
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			ObjectOutputStream oos = new ObjectOutputStream(baos);
 			FileInputStream fis = new FileInputStream("public.bin");
+			@SuppressWarnings("resource")
 			ObjectInputStream ois = new ObjectInputStream(fis);
 			RSAPublicKey pkey = (RSAPublicKey) ois.readObject();
-			Cipher cipher = Cipher.getInstance("AES");
 			Cipher pkCipher = Cipher.getInstance("RSA");
 			Key key = KeyGenerator.getInstance("AES").generateKey();
+			Cipher cipher = Cipher.getInstance("AES");
 			cipher.init(Cipher.ENCRYPT_MODE, key);
 			pkCipher.init(Cipher.ENCRYPT_MODE, pkey);
-			byte[] skey = key.getEncoded();
-			byte[] out = pkCipher.doFinal(skey);
+			oos.writeObject(key);
+			byte[] out = pkCipher.doFinal(baos.toByteArray());
 			byte[] packet = genPacket(out, out.length);
 			os.write(packet, 0, packet.length);
 			while (true) {
@@ -55,13 +60,42 @@ public class CryptoClient {
 					System.exit(0);
 				}
 			}
+			for (int i = 1; i < 11; i++) {
+				int length = (int) Math.pow(2, i);
+				byte[] data = new byte[length];
+				for (int j = 0; j < data.length; j++) {
+					data[j] = 0;
+				}
+				byte[] pack = genPacket(data, length);
+				byte[] packOut = cipher.doFinal(pack);
+				os.write(packOut, 0, packOut.length);
+				while (true) {
+					int code[] = new int[4];
+					code[0] = is.read();
+					code[1] = is.read();
+					code[2] = is.read();
+					code[3] = is.read();
+					System.out.println("0x"
+							+ Integer.toHexString(code[0]).toUpperCase()
+							+ Integer.toHexString(code[1]).toUpperCase()
+							+ Integer.toHexString(code[2]).toUpperCase()
+							+ Integer.toHexString(code[3]).toUpperCase());
+					if (code[0] == 0xCA && code[1] == 0xFE && code[2] == 0xBA
+							&& code[3] == 0xBE) {
+						break;
+					} else {
+						System.exit(0);
+					}
+				}
 
+			}
 		}
 	}
 
 	private static byte[] genPacket(byte[] out, int length) {
 		byte arr[] = new byte[28 + length];
 		int udpLen = arr.length - 20;
+		int port = 38008;
 		for (int j = 0; j < 28; j++) {
 			arr[j] = 0;
 		}
@@ -83,19 +117,20 @@ public class CryptoClient {
 		arr[11] = (byte) csum;
 		csum = csum >> 8;
 		arr[10] = (byte) csum;
-		arr[20] = (byte) 38008>>8;
+		arr[20] = (byte) 38008 >> 8;
 		arr[21] = (byte) 38008;
-		arr[22] = (byte) 38008 >> 8;
-		arr[23] = (byte) 38008;
+		arr[22] = (byte) ((port >> 8));
+		arr[23] = (byte) (port);
 		arr[25] = (byte) udpLen;
 		arr[24] = (byte) (udpLen >> 8);
-		csum = checksum(udpCs(arr));
-		arr[27] = (byte) csum;
-		csum = csum >> 8;
-		arr[26] = (byte) csum;
 		for (int i = 0; i < out.length; i++) {
 			arr[28 + i] = out[i];
 		}
+		csum = checksum(udpCs(arr, length));
+		arr[27] = (byte) csum;
+		csum = csum >> 8;
+		arr[26] = (byte) csum;
+
 		return arr;
 	}
 
@@ -129,8 +164,8 @@ public class CryptoClient {
 
 	}
 
-	private static byte[] udpCs(byte[] arr) {
-		byte ret[] = new byte[20];
+	private static byte[] udpCs(byte[] arr, int length) {
+		byte ret[] = new byte[20 + length];
 		for (int i = 0; i < ret.length; i++) {
 			ret[i] = 0;
 		}
